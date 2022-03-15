@@ -1,0 +1,255 @@
+###### Note: Must run detrending to get the y_hats to adjust to y
+rm(list = ls())
+sim_ctys <- 500
+sim_year <- 100
+M        <- 100
+# M <- 1
+J        <- 100
+K        <- 5000
+Q        <- 4
+
+#source("BSplineFunctions.R")
+source("Corn.R")
+library(tidyverse)
+library(splines)
+library(readxl)
+library(MASS)
+library(sn)
+
+#sim_results_fold1 <- NULL
+#sim_results_fold2 <- NULL
+
+set.seed(10062018)
+tau <- seq(1/J,1,1/J) - 1/(2*J)
+
+# Simulate s: Based on method of moments estimation of s
+s <- rbeta(sim_year,1.5,6)
+s_tru_quants <- qbeta(seq(1/Q,(Q-1)/Q,1/Q),1.5,6)
+s_rep <- rep(s,sim_ctys)
+lambdas <- 0.01
+n_lambdas <- length(lambdas)
+GACV_p <- rep(0,n_lambdas)
+GACV_y <- rep(0,n_lambdas)
+
+# Obtain Bspline matrices and Difference matrix
+Ds <- matrix(0,nrow=ncol(Bs)-2,ncol=ncol(Bs))
+
+for (j in 1:nrow(Ds)){
+  for (k in 1:ncol(Ds)){
+    if (k-j == 0 || k-j == 2){
+      Ds[j,k] = 1
+    } else if(k-j == 1){
+      Ds[j,k] = -2
+    }
+  }
+}
+
+Dps <- matrix(0,nrow=2*ncol(Bs)-2,ncol=2*ncol(Bs))
+
+for (j in 1:nrow(Dps)){
+  for (k in 1:ncol(Dps)){
+    if (k-j == 0 || k-j == 2){
+      Dps[j,k] = 1
+    } else if(k-j == 1){
+      Dps[j,k] = -2
+    }
+  }
+}
+
+# Get Adjustment Values
+p_feb = p_bar = tail(unique(p_pri),30)
+y_adj = as.vector(tail(unique(y_hat),30))
+last_30_yrs <- tail(unique(t_tilde),30)
+y_bar = sapply(last_30_yrs,
+               function(t){mean(y[t_tilde >= t-10 & t_tilde <= t-1])})
+phis <- seq(0.5,0.85,0.05)
+
+# Hyperparameters for Simulation
+# Linear Test
+
+p_tru_lin <- array(0,dim=c(Q-1,J,M))
+p_app_lin <- array(0,dim=c(Q-1,J,M))
+p_tru_non <- array(0,dim=c(Q-1,J,M))
+p_app_non <- array(0,dim=c(Q-1,J,M))
+y_tru_lin_p_lin <- array(0,dim=c((Q-1)^2,J,M))
+y_app_lin_p_lin <- array(0,dim=c((Q-1)^2,J,M))
+y_tru_lin_p_non <- array(0,dim=c((Q-1)^2,J,M))
+y_app_lin_p_non <- array(0,dim=c((Q-1)^2,J,M))
+y_tru_non_p_lin <- array(0,dim=c((Q-1)^2,J,M))
+y_app_non_p_lin <- array(0,dim=c((Q-1)^2,J,M))
+y_tru_non_p_non <- array(0,dim=c((Q-1)^2,J,M))
+y_app_non_p_non <- array(0,dim=c((Q-1)^2,J,M))
+
+for (m in 1:M){
+  set.seed(160793+m)
+  
+  # Based on linear regression and residual histograms of p
+  m_p_lin <- function(s){-0.5 + 0.5*s}
+  s_p_lin <- function(s){0.3 + 0.1*s}
+  m_p_non <- function(s){-0.5+0.5*exp(-s)}
+  s_p_non <- function(s){0.15+0.25*exp(-3*s)}
+  a_p <- 3
+  d_p <- a_p / sqrt(1 + a_p^2)
+  eps_p <- rsn(sim_year,-d_p*sqrt(2/pi),(1-2*d_p^2/pi)^-1,a_p)
+  
+#  m_y_lin <- function(p,s){0.34 + 37*p + 6.2*s - 155*p*s}
+  m_y_lin <- function(p,s){-1.11 + 14.45*p + 22.18*s}
+  m_y_non <- function(p,s){-5.31 + 4.67*p - 9.01*s + 136.04*p^2 + 52.56*s^2}
+  s_y <- 31
+  a_y <- -3
+  d_y <- a_y / sqrt(1 + a_y^2)
+  eps_y <- rsn(sim_year*sim_ctys,-d_y*sqrt(2/pi),(1-2*d_y^2/pi)^-1,a_y)
+  for (l in 0:3){
+    if (l %/% 2 == 0){
+      p_tilde <- m_p_lin(s) + s_p_lin(s)*eps_p
+      p_tru_lin[,,m] <- matrix(m_p_lin(s_tru_quants) + s_p_lin(s_tru_quants)*
+                                 qsn(rep(tau,each=Q-1),
+                                            -d_p*sqrt(2/pi),
+                                            (1-2*d_p^2/pi)^-1,
+                                            a_p),
+                               nrow=Q-1)
+      p_tru_quants <- m_p_lin(rep(s_tru_quants,each=Q-1)) + 
+        s_p_lin(rep(s_tru_quants,each=Q-1))*qsn(seq(1/Q,(Q-1)/Q,1/Q),
+                                                -d_p*sqrt(2/pi),
+                                                (1-2*d_p^2/pi)^-1,
+                                                a_p)
+    } else {
+      p_tilde <- m_p_non(s) + s_p_non(s)*eps_p
+      p_tru_non[,,m] <- matrix(m_p_non(s_tru_quants) + s_p_non(s_tru_quants)*
+                                 qsn(rep(tau,each=Q-1),
+                                                 -d_p*sqrt(2/pi),
+                                                 (1-2*d_p^2/pi)^-1,
+                                                 a_p),
+                               nrow=Q-1)
+      p_tru_quants <- m_p_non(rep(s_tru_quants,each=Q-1)) + 
+        s_p_non(rep(s_tru_quants,each=Q-1))*qsn(seq(1/Q,(Q-1)/Q,1/Q),
+                                                -d_p*sqrt(2/pi),
+                                                (1-2*d_p^2/pi)^-1,
+                                                a_p)
+    }
+    if (l %% 2 == 0){
+      y_tilde <- m_y_lin(p_tilde,s) + s_y*eps_y
+      if (l %/% 2 == 0){
+        y_tru_lin_p_lin[,,m] <- matrix(m_y_lin(p_tru_quants,rep(s_tru_quants,each=Q-1)) + s_y*qsn(rep(tau,each=(Q-1)^2),
+                                                 -d_y*sqrt(2/pi),
+                                                 (1-2*d_y^2/pi)^-1,
+                                                 a_y),
+                               nrow=(Q-1)^2)
+      } else {
+        y_tru_lin_p_non[,,m] <-matrix(m_y_lin(p_tru_quants,rep(s_tru_quants,each=Q-1)) + s_y*qsn(rep(tau,each=(Q-1)^2),
+                                                                                                        -d_y*sqrt(2/pi),
+                                                                                                        (1-2*d_y^2/pi)^-1,
+                                                                                                        a_y),
+                                      nrow=(Q-1)^2)
+      }
+    } else {
+      y_tilde <- m_y_non(p_tilde,s) + s_y*eps_y
+      if (l %/% 2 == 0){
+        y_tru_non_p_lin[,,m] <- matrix(m_y_non(p_tru_quants,rep(s_tru_quants,each=Q-1)) + s_y*qsn(rep(tau,each=(Q-1)^2),
+                                                                                                         -d_y*sqrt(2/pi),
+                                                                                                         (1-2*d_y^2/pi)^-1,
+                                                                                                         a_y),
+                                       nrow=(Q-1)^2)
+      } else {
+        y_tru_non_p_non[,,m] <- matrix(m_y_non(p_tru_quants,rep(s_tru_quants,each=Q-1)) + s_y*qsn(rep(tau,each=(Q-1)^2),
+                                                                                                         -d_y*sqrt(2/pi),
+                                                                                                         (1-2*d_y^2/pi)^-1,
+                                                                                                         a_y),
+                                       nrow=(Q-1)^2)
+      }
+    }
+    for (v in 1:n_lambdas){
+      lambda <- lambdas[v]
+      p_sim <- NULL
+      y_sim <- NULL
+      for (j in 1:J){
+        print(paste0("Getting Quantile ",j," from Simulation ",m,".",l," with lambda = ",lambdas[v]))
+        s_kn <- quantile(s,seq(1/Q,(Q-1)/Q,1/Q))
+        Bs <- bs(s,degree=3,knots=s_kn,intercept = TRUE)
+        Bs_quants <- bs(s_tru_quants,degree=3,knots=s_kn,Boundary.knots = c(min(s),max(s)),intercept = TRUE)
+        tau_p <- tau[j]
+        p_tm <- quant.reg(p_tilde,Bs,Ds,lambda,tau_p)
+        p_tilde_sim <- Bs_quants %*% p_tm$b
+        tau_y <- tau[j]
+        p_tilde_rep <- rep(p_tilde,sim_ctys)
+        p_kn <- quantile(p_tilde_rep,seq(1/Q,(Q-1)/Q,1/Q))
+        Bp_quants <- bs(p_tru_quants,degree=3,knots=p_kn,Boundary.knots = c(min(p_tilde),max(p_tilde)),intercept = TRUE)
+        Bp_rep <- bs(p_tilde_rep,degree=3,knots=p_kn,intercept = TRUE)
+        Bs_quants <- bs(rep(s_tru_quants,each=Q-1),degree=3,knots=s_kn,Boundary.knots = c(min(s),max(s)),intercept = TRUE)
+        Bs_rep <- bs(s_rep,degree=3,knots=s_kn,intercept = TRUE)
+        Bps_quants <- cbind(Bp_quants,Bs_quants)
+        Bps_rep <- cbind(Bp_rep,Bs_rep)
+        y_tm <- quant.reg(y_tilde,Bps_rep,Dps,lambda,tau_y)
+        y_tilde_sim <- Bps_quants %*% y_tm$b
+        p_sim <- cbind(p_sim,p_tilde_sim)
+        y_sim <- cbind(y_sim,y_tilde_sim)
+      }
+      if (l == 0){
+        p_app_lin[,,m] <- p_sim
+        y_app_lin_p_lin[,,m] <- y_sim
+      } else if (l == 1) {
+        y_app_non_p_lin[,,m] <- y_sim
+      } else if (l == 2) {
+        p_app_non[,,m] <- p_sim
+        y_app_lin_p_non[,,m] <- y_sim
+      } else {
+        y_app_non_p_non[,,m] <- y_sim
+      }
+      # GACV_p[v] <- GACV_p[v] + sum(p_tm$fit)/(sim_year - length(p_tm$b))
+      # GACV_y[v] <- GACV_y[v] + sum(y_tm$fit)/(sim_year*sim_ctys - length(y_tm$b))
+    }
+    # if (m == 1){
+    #   if (l == 0){
+    #     p_tru_sim_lin <- (m_p_lin(s_tru_quants) + s_p_lin(s_tru_quants)*rsn((Q-1)*K,-d_p*sqrt(2/pi),(1-2*d_p^2/pi)^-1,a_p)) %>% matrix(nrow=Q-1)
+    #     y_tru_sim_lin_p_lin <- (m_y_lin(as.vector(p_tru_sim_lin),rep(s_tru_quants,K)) + s_y*rsn((Q-1)*K,-d_y*sqrt(2/pi),(1-2*d_y^2/pi)^-1,a_y)) %>% matrix(nrow=(Q-1))
+    #   } else if (l == 1) {
+    #     y_tru_sim_non_p_lin <- (m_y_non(as.vector(p_tru_sim_lin),rep(s_tru_quants,K)) + s_y*rsn((Q-1)*K,-d_y*sqrt(2/pi),(1-2*d_y^2/pi)^-1,a_y)) %>% matrix(nrow=(Q-1))
+    #   } else if (l == 2) {
+    #     p_tru_sim_non <- (m_p_non(s_tru_quants) + s_p_non(s_tru_quants)*rsn((Q-1)*K,-d_p*sqrt(2/pi),(1-2*d_p^2/pi)^-1,a_p)) %>% matrix(nrow=Q-1)
+    #     y_tru_sim_lin_p_non <- (m_y_lin(as.vector(p_tru_sim_non),rep(s_tru_quants,K)) + s_y*rsn((Q-1)*K,-d_y*sqrt(2/pi),(1-2*d_y^2/pi)^-1,a_y)) %>% matrix(nrow=(Q-1))
+    #   } else {
+    #     y_tru_sim_non_p_non <- (m_y_non(as.vector(p_tru_sim_non),rep(s_tru_quants,K)) + s_y*rsn((Q-1)*K,-d_y*sqrt(2/pi),(1-2*d_y^2/pi)^-1,a_y)) %>% matrix(nrow=(Q-1))
+    #   }
+    #   p_sim <- NULL
+    #   y_sim <- NULL
+    #   for (k in 1:K){
+    #     print(paste0("Running Simulation: ",l,".",k))
+    #     s_kn <- quantile(s,seq(1/Q,(Q-1)/Q,1/Q))
+    #     Bs <- bs(s,degree=3,knots=s_kn,intercept = TRUE)
+    #     Bs_quants <- bs(s_tru_quants,degree=3,knots=s_kn,Boundary.knots = c(min(s),max(s)),intercept = TRUE)
+    #     if (l %% 2 == 0){
+    #       tau_p <- runif(1)
+    #       p_tilde_sim <- Bs_quants %*% quant.reg(p_tilde,Bs,Ds,lambda,tau_p)$b
+    #     } else if (l == 1){
+    #       p_tilde_sim <- p_app_sim_lin[,k]
+    #     } else {
+    #       p_tilde_sim <- p_app_sim_non[,k]
+    #     }
+    #     tau_y <- runif(1)
+    #     p_tilde_rep <- rep(p_tilde,sim_ctys)
+    #     p_kn <- quantile((p_tilde_rep),seq(1/Q,(Q-1)/Q,1/Q))
+    #     Bp <- bs((as.vector(p_tilde_sim)),degree=3,knots=p_kn,Boundary.knots = c(min(p_tilde),max(p_tilde)),intercept = TRUE)
+    #     Bp_rep <- bs((p_tilde_rep),degree=3,knots=p_kn,intercept = TRUE)
+    #     Bs_quants <- bs(s_tru_quants,degree=3,knots=s_kn,Boundary.knots = c(min(s),max(s)),intercept = TRUE)
+    #     Bs_rep <- bs(s_rep,degree=3,knots=s_kn,intercept = TRUE)
+    #     Bps_quants <- cbind(Bp,Bs_quants)
+    #     Bps_rep <- cbind(Bp_rep,Bs_rep)
+    #     y_tilde_sim <- Bps_quants %*% quant.reg(y_tilde,Bps_rep,Dps,lambda,tau_y)$b
+    #     p_sim <- cbind(p_sim,p_tilde_sim)
+    #     y_sim <- cbind(y_sim,y_tilde_sim)
+    #   }
+    #   if (l == 0){
+    #     p_app_sim_lin <- p_sim
+    #     y_app_sim_lin_p_lin <- y_sim
+    #   } else if (l == 1) {
+    #     y_app_sim_non_p_lin <- y_sim
+    #   } else if (l == 2) {
+    #     p_app_sim_non <- p_sim
+    #     y_app_sim_lin_p_non <- y_sim
+    #   } else {
+    #     y_app_sim_non_p_non <- y_sim
+    #   }
+    # }
+  }
+}
+
