@@ -8,3 +8,5 @@ The code files are labelled as follows:
 - Sim... are the code for conducting the simulation study as well as creating the plots for our simulation study
 - Corn_by_State_1990_pbyt is the code for running the SQR by time and state for each quantile regression (Note: The associated file starting with Soybeans is the same code for the soybean dataset)
 - Corn_Plots_State_1990_pbyt is the code for creating the plots from the SQR output (Note: The associated file starting with Soybeans is the same code for the soybean dataset)
+
+The data files are found directly from the United States Department of Agriculture's National Agricultural Statistics Service database at https://quickstats.nass.usda.gov/.  The information on GDP is found using end-of-year GDP data from the Federal Reserve database.  The information on implied volatility was found from February futures prices for November's harvest for Corn and March futures prices for November's harvest for Soybeans.
